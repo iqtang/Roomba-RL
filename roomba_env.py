@@ -46,7 +46,7 @@ class RoombaEnv(gym.Env):
         self.max_steps = 5000
         self.max_collisions = 500
 
-        self.dt = 1 / 240  
+        self.dt = 1 / 120  
 
         self.action_space = spaces.Box(
             low=-1.0,
@@ -181,6 +181,12 @@ class RoombaEnv(gym.Env):
             r_collision += -100
 
         reward = r_explore + r_collision + self.reward_timestep
+
+        coverage = np.sum(self.visited_grid) / (self.grid_width * self.grid_height)
+        if coverage >= 0.8:
+            reward += 500 
+            done = True
+            print("Reached 80% coverage")
 
         if self.step_count >= self.max_steps or self.collision_count >= self.max_collisions:
             done = True
@@ -374,8 +380,8 @@ if __name__ == "__main__":
 
     collision_count = 0
 
-    linear_speed = 2   
-    angular_speed = .2 
+    linear_speed = 1.5   
+    angular_speed = 1
 
     for step in range(5000):
         action = np.array([linear_speed, angular_speed], dtype=np.float32)

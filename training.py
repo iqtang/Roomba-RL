@@ -9,7 +9,7 @@ import os
 from roomba_env import RoombaEnv
 
 def make_env():
-    return RoombaEnv(world_type="carousel", gui=True)
+    return RoombaEnv(world_type="empty", gui=True)
 
 env = DummyVecEnv([make_env])
 
@@ -42,7 +42,7 @@ callback = RoombaEvalCallback(verbose=1)
 
 
 model.learn(
-    total_timesteps=1000000,
+    total_timesteps=2000000,
     callback=callback
 )
 
