@@ -43,7 +43,7 @@ class RoombaEnv(gym.Env):
 
         self.step_count = 0
         self.collision_count = 0
-        self.max_steps = 3000
+        self.max_steps = 5000
         self.max_collisions = 500
 
         self.dt = 1 / 240  
@@ -57,11 +57,11 @@ class RoombaEnv(gym.Env):
 
 
         obs_high = np.array(
-            [2.0, 2.0, np.pi, 1.5, 1.5] + [MAX_LASER_RANGE]*NUM_LASER_RAYS,
+            [2.0, 2.0, np.pi, 1.5, 1.5] + [MAX_LASER_RANGE]*NUM_LASER_RAYS + [1.0]*(self.grid_width*self.grid_height),
             dtype=np.float32
         )
         obs_low  = np.array(
-            [-2.0, -2.0, -np.pi, .15, -1.5] + [0.0]*NUM_LASER_RAYS,
+            [-2.0, -2.0, -np.pi, .15, -1.5] + [0.0]*NUM_LASER_RAYS + [0.0]*(self.grid_width*self.grid_height),
             dtype=np.float32
         )
         self.observation_space = spaces.Box(obs_low, obs_high, dtype=np.float32)
@@ -106,6 +106,8 @@ class RoombaEnv(gym.Env):
             cameraTargetPosition=[0, 0, 0]
         )   
 
+        self.draw_grid()
+
         return self._get_obs(), {}
 
 
@@ -119,6 +121,8 @@ class RoombaEnv(gym.Env):
     def step(self, action):
         self.sim_time += self.dt
         self.step_count += 1
+
+        done = False
         
         v     = np.interp(action[0], [-1, 1], [-1.5, 1.5])
         omega = np.interp(action[1], [-1, 1], [-1.5, 1.5])
@@ -146,32 +150,31 @@ class RoombaEnv(gym.Env):
         
         i, j = self._pos_to_grid(obs[:2])
         new_cell = False
+
         if not self.visited_grid[i, j]:
-            #r_explore += self.reward_new_area
+            r_explore += self.reward_new_area
             self.visited_grid[i, j] = True
             new_cell = True
         else:
             r_explore += -1
-        
-        coverage_fraction = np.sum(self.visited_grid) / (self.grid_width * self.grid_height)
-        if coverage_fraction > self.max_coverage:
-            r_explore += 50 * (coverage_fraction - self.max_coverage)  # scale reward
-            self.max_coverage = coverage_fraction
 
 
     
-        lidar = obs[5:]  # LIDAR readings
+        lidar = obs[5: 5 + NUM_LASER_RAYS]  # LIDAR readings
 
         r_collision = 0.0
         collision = False
 
         min_front = np.min(lidar)
+
+
+        if min_front < 0.30:
+            r_collision += -5.0 * (0.30 - min_front) / .30
+
         if min_front < 0.15:
-            r_collision += self.reward_collision
-            self.collision_count += 1
             collision = True
-        elif min_front < 0.3:
-            r_collision += -10 * (0.3 - min_front) / 0.3
+            self.collision_count += 1
+            r_collision += self.reward_collision
 
 
         if self.collision_count >= self.max_collisions:
@@ -179,9 +182,6 @@ class RoombaEnv(gym.Env):
 
         reward = r_explore + r_collision + self.reward_timestep
 
-    
-
-        done = False
         if self.step_count >= self.max_steps or self.collision_count >= self.max_collisions:
             done = True
             print(f"NUM collisions = {self.collision_count}")
@@ -194,6 +194,8 @@ class RoombaEnv(gym.Env):
             "collision": collision,
             "coverage": np.sum(self.visited_grid) / (self.grid_width * self.grid_height)
         }
+
+        #self.draw_visited_cells()
 
         return obs, reward, done, False, info
 
@@ -238,7 +240,9 @@ class RoombaEnv(gym.Env):
                 except Exception:
                     self.lidar_lines[i] = None  
 
-        return np.array([pos[0], pos[1], yaw, v, omega] + lidar, dtype=np.float32)
+        visited_flat = self.visited_grid.astype(np.float32).flatten()
+
+        return np.array([pos[0], pos[1], yaw, v, omega] + lidar + visited_flat.tolist(), dtype=np.float32)
 
 
 
@@ -292,6 +296,62 @@ class RoombaEnv(gym.Env):
         i = np.clip(i, 0, self.grid_width - 1)
         j = np.clip(j, 0, self.grid_height - 1)
         return i, j
+    
+    def _grid_to_pos(self, i, j):
+        x = -self.arena_half_size + (i + 0.5) * self.grid_size
+        y = -self.arena_half_size + (j + 0.5) * self.grid_size
+        return x, y
+    
+    def draw_grid(self):
+        cell = self.grid_size
+        half = self.arena_half_size
+
+        if hasattr(self, "grid_line_ids"):
+            for line in self.grid_line_ids:
+                p.removeUserDebugItem(line)
+
+        self.grid_line_ids = []
+
+        x_vals = np.arange(-half, half + cell, cell)
+        for x in x_vals:
+            line_id = p.addUserDebugLine(
+                [x, -half, 0.01],
+                [x,  half, 0.01],
+                lineColorRGB=[0.6, 0.6, 0.6],
+                lineWidth=1.0
+            )
+            self.grid_line_ids.append(line_id)
+
+        y_vals = np.arange(-half, half + cell, cell)
+        for y in y_vals:
+            line_id = p.addUserDebugLine(
+                [-half, y, 0.01],
+                [ half, y, 0.01],
+                lineColorRGB=[0.6, 0.6, 0.6],
+                lineWidth=1.0
+            )
+
+    def draw_visited_cells(self):
+        cell = self.grid_size
+        half = self.arena_half_size
+        z = 0.015
+
+        if hasattr(self, "cell_mark_ids"):
+            for cid in self.cell_mark_ids:
+                p.removeUserDebugItem(cid)
+        self.cell_mark_ids = []
+
+        for i in range(self.grid_width):
+            for j in range(self.grid_height):
+                if self.visited_grid[i, j]:
+                    x, y = self._grid_to_pos(i, j)
+                    cid = p.addUserDebugLine(
+                        [x - cell/2, y - cell/2, z],
+                        [x + cell/2, y + cell/2, z],
+                        lineColorRGB=[0, 1, 0],
+                        lineWidth=5
+                    )
+                    self.cell_mark_ids.append(cid)
 
     def render(self, mode="human"):
         pass
@@ -321,7 +381,7 @@ if __name__ == "__main__":
         action = np.array([linear_speed, angular_speed], dtype=np.float32)
         obs, reward, done, truncated, info = env.step(action)
 
-        min_distance = min(obs[5:]) 
+        min_distance = min(obs[5: 5 + NUM_LASER_RAYS]) 
         if min_distance < .15:
             collision_count += 1
 
