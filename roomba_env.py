@@ -36,17 +36,18 @@ class RoombaEnv(gym.Env):
         self.visited_grid = np.zeros((self.grid_width, self.grid_height), dtype=np.bool_)
 
         self.max_coverage = 0.0
+        self.last_desnity = 0.0
 
-        self.reward_new_area = 10
-        self.reward_collision = -10
-        self.reward_timestep = -0.01
+        self.reward_new_area = 3
+        self.reward_collision = -30
+        self.reward_timestep = 0
 
         self.step_count = 0
         self.collision_count = 0
-        self.max_steps = 5000
+        self.max_steps = 3000
         self.max_collisions = 500
 
-        self.dt = 1 / 120  
+        self.dt = 1 / 240
 
         self.action_space = spaces.Box(
             low=-1.0,
@@ -61,7 +62,7 @@ class RoombaEnv(gym.Env):
             dtype=np.float32
         )
         obs_low  = np.array(
-            [-2.0, -2.0, -np.pi, .15, -1.5] + [0.0]*NUM_LASER_RAYS + [0.0]*(self.grid_width*self.grid_height),
+            [-2.0, -2.0, -np.pi, -1.5, -1.5] + [0.0]*NUM_LASER_RAYS + [0.0]*(self.grid_width*self.grid_height),
             dtype=np.float32
         )
         self.observation_space = spaces.Box(obs_low, obs_high, dtype=np.float32)
@@ -75,6 +76,7 @@ class RoombaEnv(gym.Env):
         self.step_count = 0
         self.collision_count = 0
         self.sim_time = 0.0
+        self.last_desnity = 0.0
 
         if self.physics_client is None:
             self.physics_client = p.connect(p.GUI if self.gui else p.DIRECT)
@@ -152,11 +154,27 @@ class RoombaEnv(gym.Env):
         new_cell = False
 
         if not self.visited_grid[i, j]:
-            r_explore += self.reward_new_area
+            #r_explore += self.reward_new_area
             self.visited_grid[i, j] = True
             new_cell = True
         else:
-            r_explore += -1
+            r_explore += -.03
+
+        '''density_now = self.local_unvisited_density(i, j, radius=2)
+
+        # Compute delta density (reward for moving towards unvisited areas)
+        r_density = 2.0 * (density_now - getattr(self, 'last_density', 0))
+        self.last_density = density_now'''
+
+
+
+        coverage = np.sum(self.visited_grid) / (self.grid_width * self.grid_height)
+        if coverage > self.max_coverage:
+            r_explore += 50 * (coverage - self.max_coverage)
+            self.max_coverage = coverage
+        '''if coverage > self.max_coverage:
+            r_explore += 50 * (coverage - self.max_coverage)
+            self.max_coverage = coverage'''
 
 
     
@@ -166,31 +184,40 @@ class RoombaEnv(gym.Env):
         collision = False
 
         min_front = np.min(lidar)
+        if min_front <= .4:
+            r_collision += -15 * (.4 - min_front) / .4
+
+        if self._check_collision():  #min_front < 0.15:
+            collision = True
+            self.collision_count += 1
+            r_collision += self.reward_collision
+            #print("BONK")
 
 
-        if min_front < 0.30:
-            r_collision += -5.0 * (0.30 - min_front) / .30
+        '''if min_front < 0.30:
+            r_collision += -10.0 * (0.30 - min_front) / .30
 
         if min_front < 0.15:
             collision = True
             self.collision_count += 1
-            r_collision += self.reward_collision
+            r_collision += self.reward_collision'''
 
 
         if self.collision_count >= self.max_collisions:
             r_collision += -100
-
-        reward = r_explore + r_collision + self.reward_timestep
-
-        coverage = np.sum(self.visited_grid) / (self.grid_width * self.grid_height)
-        if coverage >= 0.8:
-            reward += 500 
             done = True
-            print("Reached 80% coverage")
 
-        if self.step_count >= self.max_steps or self.collision_count >= self.max_collisions:
+
+        if coverage >= 0.5:
+            reward += 100 
+            done = True
+            print("Reached 50% coverage")
+
+        if self.step_count >= self.max_steps:
             done = True
             print(f"NUM collisions = {self.collision_count}")
+
+        reward = r_explore + r_collision + self.reward_timestep #+ r_density
 
 
         info = {
@@ -249,6 +276,15 @@ class RoombaEnv(gym.Env):
         visited_flat = self.visited_grid.astype(np.float32).flatten()
 
         return np.array([pos[0], pos[1], yaw, v, omega] + lidar + visited_flat.tolist(), dtype=np.float32)
+    
+
+    def _check_collision(self):
+        for c in p.getContactPoints(self.robot):
+            bodyA = c[1]
+            bodyB = c[2]
+            if bodyA != 0 and bodyB != 0:
+                return True
+        return False
 
 
 
@@ -285,7 +321,7 @@ class RoombaEnv(gym.Env):
 
     def step_carousel(self):
         r = 1.25
-        speed = .3
+        speed = .2
         for i, cid in enumerate(self.carousel_ids):
             angle = i * 2*np.pi/len(self.carousel_ids) + speed*self.sim_time
             x = r * np.cos(angle)
@@ -367,12 +403,26 @@ class RoombaEnv(gym.Env):
             p.disconnect(self.physics_client)
             self.physics_client = None
 
+    def local_unvisited_density(self, i, j, radius=1):
+        """
+        Returns the fraction of unvisited cells in a (2*radius+1)x(2*radius+1) neighborhood.
+        """
+        i_min = max(i - radius, 0)
+        i_max = min(i + radius + 1, self.grid_width)
+        j_min = max(j - radius, 0)
+        j_max = min(j + radius + 1, self.grid_height)
+        
+        neighborhood = self.visited_grid[i_min:i_max, j_min:j_max]
+        unvisited = np.logical_not(neighborhood)
+        density = np.mean(unvisited)
+        return density
+
 if __name__ == "__main__":
     import time
     import numpy as np
 
 
-    env = RoombaEnv(world_type="obstacle", gui=True)
+    env = RoombaEnv(world_type="carousel", gui=True)
 
 
     obs, _ = env.reset()
@@ -380,8 +430,8 @@ if __name__ == "__main__":
 
     collision_count = 0
 
-    linear_speed = 1.5   
-    angular_speed = 1
+    linear_speed = 0
+    angular_speed = 0
 
     for step in range(5000):
         action = np.array([linear_speed, angular_speed], dtype=np.float32)

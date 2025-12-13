@@ -9,7 +9,7 @@ import os
 from roomba_env import RoombaEnv
 
 def make_env():
-    return RoombaEnv(world_type="empty", gui=True)
+    return RoombaEnv(world_type="carousel", gui=True)
 
 env = DummyVecEnv([make_env])
 
@@ -21,14 +21,14 @@ model = PPO(
     env=env,
     device='cuda',
     learning_rate=3e-4,
-    n_steps=2048,
+    n_steps=1024,
     batch_size=256,
-    n_epochs=5,
+    n_epochs=10,
     gamma=0.99,
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=.01,
-    verbose=1,
+    ent_coef=.005,
+    verbose=1
 )
 
 
@@ -42,7 +42,7 @@ callback = RoombaEvalCallback(verbose=1)
 
 
 model.learn(
-    total_timesteps=2000000,
+    total_timesteps=1000000,
     callback=callback
 )
 

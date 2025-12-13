@@ -41,11 +41,9 @@ class RoombaEvalCallback(BaseCallback):
             self.episode_coverage.append(self.current_coverage)
 
 
-            if len(self.episode_rewards) % self.print_every == 0:
-                avg_reward = np.mean(self.episode_rewards[-self.print_every:])
-                avg_coverage = np.mean(self.episode_coverage[-self.print_every:])
-                print(f"Episode {len(self.episode_rewards)} - avg reward last {self.print_every}: {avg_reward:.2f}, "
-                      f"avg coverage: {avg_coverage:.2f}")
+            print(f"Episode {len(self.episode_rewards)} finished - reward: {self.current_reward:.2f}, "
+              f"coverage: {self.current_coverage:.2f}, collisions: {self.current_collisions}")
+
 
             self.current_reward = 0
             self.current_length = 0
